@@ -1,0 +1,11 @@
+{
+  "name": "ipd",
+  "version": "1.1.0",
+  "description": "Image Push and Deploy service",
+  "author": "Vitaly Chekryzhev",
+  "license": "Proprietary",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/13hakta/ipd.git"
+  }
+}
