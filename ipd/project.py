@@ -11,7 +11,7 @@ class Project:
         self.deployment = None
         self.processed = 0
 
-    def process(self, deployment):
+    def process(self, deployment) -> int:
         if self.deployment and self.deployment.state < 4:
             return 1
 
@@ -23,13 +23,13 @@ class Project:
 
         return 0
 
-    def state(self):
+    def state(self) -> int:
         if self.deployment:
             self.last_state = self.deployment.state
 
         return self.last_state
 
-    def state_code(self):
+    def state_code(self) -> str:
         result = self.state()
 
         if result < 4:
@@ -40,13 +40,19 @@ class Project:
 
         return "err"
 
-    def info(self):
-        if self.deployment:
-            self.last_state = self.deployment.state
-
-        return {
+    def info(self) -> dict:
+        result = {
             "start": int(self.start),
-            "state": self.last_state,
             "start_count": self.start_count,
             "processed": self.processed,
         }
+
+        if self.deployment:
+            self.last_state = self.deployment.state
+
+            if self.deployment.version:
+                result["version"] = self.deployment.version
+
+        result["state"] = self.last_state
+
+        return result
