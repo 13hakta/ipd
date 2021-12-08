@@ -1,0 +1,20 @@
+stages:
+  - test
+  - build
+
+test:
+  stage: test
+  image: python:3-alpine
+  script:
+    - pip install -e .[dev]
+    - pytest tests/ -v
+
+build:
+  stage: build
+  image: python:3-alpine
+  artifacts:
+    paths:
+      - dist/*.whl
+  script:
+    - pip install build
+    - python -m build
