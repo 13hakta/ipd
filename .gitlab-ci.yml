@@ -1,0 +1,11 @@
+stages:
+  - build
+
+build:
+  stage: build
+  image: python:3-alpine
+  artifacts:
+    paths:
+      - dist/*.whl
+  script:
+    - python setup.py bdist_wheel
