@@ -9,6 +9,7 @@ class Project:
         self.start = time.time()
         self.last_state = -1
         self.deployment = None
+        self.processed = 0
 
     def process(self, deployment):
         if self.deployment and self.deployment.state < 4:
@@ -47,4 +48,5 @@ class Project:
             "start": int(self.start),
             "state": self.last_state,
             "start_count": self.start_count,
+            "processed": self.processed,
         }
