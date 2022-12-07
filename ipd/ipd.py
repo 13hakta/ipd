@@ -68,7 +68,7 @@ def upload_file(user):
         request.environ.get("HTTP_X_REAL_IP", request.remote_addr),
     )
 
-    version = request.form["version"] if "version" in request.form else None
+    version = request.form.get("version", None)
 
     code = gen_code()
 
@@ -110,7 +110,7 @@ def upload_file(user):
         logging.error("[%s] Deployment check failed", project)
         return "err", 400
 
-    logging.info("[%s:%s] Add deploy %s", project, user, deployment.uuid)
+    logging.info("[%s:%s] Add deploy by %s", project, deployment.uuid, user)
 
     result = project_manager.add(deployment)
 
