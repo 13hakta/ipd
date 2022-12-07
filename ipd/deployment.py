@@ -75,7 +75,7 @@ class Deployment:
         self.thread.start()
 
     def process(self) -> int:
-        logging.info("[%s] Start deploy %s", self.project, self.uuid)
+        logging.info("[%s:%s] Start deploy", self.project, self.uuid)
         self.state = 1
 
         env = {"PATH": os.environ["PATH"], "PROJECT": self.project, "DEPLOY": self.uuid}
@@ -88,11 +88,20 @@ class Deployment:
                 env=env,
                 timeout=TIMEOUT,
                 check=True,
+                capture_output=True,
             )
         except subprocess.TimeoutExpired as te:
             logging.error("[%s] Cant unpack, timeout", self.project)
             return self.cleanup(1030)
         except subprocess.CalledProcessError as cpe:
+            if cpe.stderr:
+                logging.error(
+                    "[%s:%s] Unpack error output: %s",
+                    self.project,
+                    self.uuid,
+                    cpe.stderr,
+                )
+
             logging.error("[%s] Cant unpack, retcode=%d", self.project, cpe.returncode)
             return self.cleanup(103)
 
@@ -106,13 +115,25 @@ class Deployment:
 
         try:
             subprocess.run(
-                [self.control_script, "check"], env=env, timeout=TIMEOUT, check=True
+                [self.control_script, "check"],
+                env=env,
+                timeout=TIMEOUT,
+                check=True,
+                capture_output=True,
             )
         except subprocess.TimeoutExpired as te:
             logging.error("[%s] Cant check, timeout", self.project)
             return self.cleanup(1031)
         except subprocess.CalledProcessError as cpe:
             return_code = cpe.returncode
+
+            if cpe.stderr:
+                logging.error(
+                    "[%s:%s] Check error output: %s",
+                    self.project,
+                    self.uuid,
+                    cpe.stderr,
+                )
 
         # Need to prepare environment
         if return_code != 1:
@@ -122,11 +143,20 @@ class Deployment:
                     env=env,
                     timeout=TIMEOUT,
                     check=True,
+                    capture_output=True,
                 )
             except subprocess.TimeoutExpired as te:
                 logging.error("[%s] Cant prepare, timeout", self.project)
                 return self.cleanup(1032)
             except subprocess.CalledProcessError as cpe:
+                if cpe.stderr:
+                    logging.error(
+                        "[%s:%s] Prepare error output: %s",
+                        self.project,
+                        self.uuid,
+                        cpe.stderr,
+                    )
+
                 logging.error(
                     "[%s] Cant prepare environment, retcode=%d",
                     self.project,
@@ -143,7 +173,11 @@ class Deployment:
 
         try:
             subprocess.run(
-                [self.control_script, "deploy"], env=env, timeout=TIMEOUT, check=True
+                [self.control_script, "deploy"],
+                env=env,
+                timeout=TIMEOUT,
+                check=True,
+                capture_output=True,
             )
         except subprocess.TimeoutExpired as te:
             logging.error("[%s] Cant deploy, timeout", self.project)
@@ -151,11 +185,21 @@ class Deployment:
         except subprocess.CalledProcessError as cpe:
             return_code = cpe.returncode
 
+            if cpe.stderr:
+                logging.error(
+                    "[%s:%s] Deploy error output: %s",
+                    self.project,
+                    self.uuid,
+                    cpe.stderr,
+                )
+
         if return_code != 1:
-            logging.error("[%s] Cant deploy, returned %d", self.project, return_code)
+            logging.error(
+                "[%s:%s] Cant deploy, returned %d", self.project, self.uuid, return_code
+            )
             return self.cleanup(105)
 
         self.parent.processed += os.path.getsize(self.image_file)
 
-        logging.info("[%s] Deploy successful %s", self.project, self.uuid)
+        logging.info("[%s:%s] Deploy successful", self.project, self.uuid)
         return self.cleanup(4)
