@@ -1,0 +1,19 @@
+[Unit]
+Description=Image Push and Deploy
+After=network.target
+
+[Service]
+User=ipd
+WorkingDirectory=/opt/ipd
+ExecStart=/opt/ipd/bin/ipd
+EnvironmentFile=-/etc/default/ipd
+Restart=on-failure
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/upload
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
