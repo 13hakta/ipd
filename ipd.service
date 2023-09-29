@@ -1,0 +1,12 @@
+[Unit]
+Description=Image Push and Deploy
+
+[Service]
+User=ipd
+WorkingDirectory=/opt/ipd
+ExecStart=/opt/ipd/bin/ipd
+EnvironmentFile=-/etc/default/ipd
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
