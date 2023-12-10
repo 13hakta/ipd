@@ -99,7 +99,7 @@ class ProjectManager:
                     project_obj.deployment
                     and project_obj.deployment.uuid != deployment_uuid
                 ):
-                    return "no"
+                    return "changed"
         else:
             return "no"
 
