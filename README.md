@@ -104,3 +104,18 @@ Must be set through `/etc/ipd.conf` or environment variables.
 - Setup virtualenv<br>`python3 -m venv venv`
 - Activate virtualenv<br>`source ./venv/bin/activate`
 - Prepare app<br>`python3 setup.py develop`
+
+## Return codes for deploy status
+
+Request deploy status by retrieving url `https://$REMOTE_HOST/deploy/status/$PROJECT/$PROJECT_DEPLOYMENT`.
+
+In return you retrieve states:
+
+| Code | Description |
+| ------ | ------ |
+| await | Awaiting in queue |
+| active | Deployment enrolling |
+| ok | Deployment successful |
+| no | No such project processed |
+| changed | Another deployment added while processing |
+| *another code* | Code number returned by deployment script |
