@@ -1,22 +1,28 @@
 # -*- coding: utf-8 -*-
 import logging
 import os
+import signal
 import sys
+from threading import Event, Thread
+from typing import Optional
 from flask import Flask, request
-from waitress import serve
+from waitress.server import create_server
 
 from .auth import load_db, require_role
 from .deployment import Deployment
 from .manager import ProjectManager
+from .sdnotify import WatchdogThread, sd_notify
 from .svcthread import ServiceThread
 from .utils import allowed_file, valid_project
 
+IDEMPOTENCY_KEY_MAX = 128
+
 
 def create_app(
-    upload_dir: str = None,
-    auth_db: str = None,
-    api_root: str = None,
-    max_upload_size: int = None,
+    upload_dir: Optional[str] = None,
+    auth_db: Optional[str] = None,
+    api_root: Optional[str] = None,
+    max_upload_size: Optional[int] = None,
 ) -> Flask:
     """Create and configure Flask application"""
     if upload_dir is None:
@@ -31,6 +37,7 @@ def create_app(
         )
 
     # Init logging: write to stderr, let systemd journal collect it.
+    # No log file to create or rotate on disk.
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
         stream=sys.stderr,
@@ -49,9 +56,21 @@ def create_app(
     project_manager = ProjectManager()
     app.extensions["project_manager"] = project_manager
 
+    # Clean up leftovers of deployments interrupted by a restart
+    project_manager.recover(upload_dir)
+
     @app.route(api_root)
     def home():
         return "Image push & Deploy\n"
+
+    @app.route(api_root + "/health", methods=["GET"])
+    def health():
+        return "ok\n"
+
+    @app.route(api_root + "/metrics", methods=["GET"])
+    @require_role("ADMIN")
+    def get_metrics(user):
+        return project_manager.metrics(), 200, {"Content-Type": "text/plain"}
 
     @app.route(api_root + "/list", methods=["GET"])
     @require_role("ADMIN")
@@ -81,6 +100,28 @@ def create_app(
 
         version = request.form.get("version")
 
+        # Idempotent retries: same Idempotency-Key for the same project
+        # returns the uuid of the already accepted deployment.
+        idempotency_key = (request.headers.get("Idempotency-Key") or "").strip()
+
+        if idempotency_key:
+            if (
+                len(idempotency_key) > IDEMPOTENCY_KEY_MAX
+                or not idempotency_key.isprintable()
+            ):
+                logging.error("[%s] Invalid idempotency key", project)
+                return "err", 400
+
+            existing = project_manager.find_idempotent(project, idempotency_key)
+
+            if existing:
+                logging.info(
+                    "[%s] Idempotent retry: return existing %s",
+                    project,
+                    existing.uuid,
+                )
+                return existing.uuid
+
         # Validate the whole request before writing anything to disk,
         # so failed uploads leave no garbage behind.
 
@@ -105,6 +146,7 @@ def create_app(
             return "err", 400
 
         deployment = Deployment(project, upload_dir, img.filename, version=version)
+        deployment.idempotency_key = idempotency_key or None
 
         try:
             deployment.save(pkg, img)
@@ -151,18 +193,60 @@ def create_app(
     return app
 
 
-def main():
-    logging.info("Start app")
+def main(argv=None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    if argv and argv[0] == "user":
+        from .cli import user_cli
+
+        raise SystemExit(user_cli(argv[1:]))
+
     web_address = os.environ.get("WEBADDRESS", "127.0.0.1")
     web_port = int(os.environ.get("WEBPORT", "9955"))
+    shutdown_timeout = float(os.environ.get("SHUTDOWN_TIMEOUT", "60"))
 
     app = create_app()
+    manager = app.extensions["project_manager"]
 
-    service = ServiceThread(app.extensions["project_manager"])
+    service = ServiceThread(manager)
     service.start()
 
-    serve(app, host=web_address, port=web_port)
-    logging.info("Stop app")
+    watchdog = WatchdogThread()
+    watchdog.start()
+
+    server = create_server(app, host=web_address, port=web_port)
+    server_thread = Thread(target=server.run, daemon=True)
+    server_thread.start()
+
+    sd_notify("READY=1")
+    logging.info("Start app")
+
+    done = Event()
+
+    def handle_signal(signum, frame):
+        done.set()
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
+    done.wait()
+
+    logging.info(
+        "Stop app: waiting up to %ds for running deployments", int(shutdown_timeout)
+    )
+    sd_notify("STOPPING=1")
+
+    # Stop accepting new requests, in-flight ones finish on their own
+    server.close()
+    server_thread.join(5)
+
+    # Wait for running deployments, then stop background loops
+    manager.stop(shutdown_timeout)
+    service.stop_event.set()
+    watchdog.stop_event.set()
+
+    logging.info("Stopped")
     return None
 
 
