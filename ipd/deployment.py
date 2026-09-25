@@ -8,8 +8,14 @@ import tarfile
 import uuid
 import logging
 from threading import Thread
+from typing import TYPE_CHECKING, Optional
 
 from werkzeug.utils import secure_filename
+
+if TYPE_CHECKING:
+    from .manager import ProjectManager
+    from .project import Project
+
 
 # -1  - Wait in queue
 # 0   - Start process
@@ -24,19 +30,29 @@ from werkzeug.utils import secure_filename
 TIMEOUT = 1800
 
 
+def env_timeout(name: str) -> int:
+    """Per-step subprocess timeout from environment, TIMEOUT by default"""
+    try:
+        return max(1, int(os.environ.get(name, TIMEOUT)))
+    except ValueError:
+        logging.warning("Invalid %s value, using default %d", name, TIMEOUT)
+        return TIMEOUT
+
+
 class Deployment:
     def __init__(
         self,
         project: str,
         upload_dir: str,
         image_filename: str,
-        version: str = None,
+        version: Optional[str] = None,
     ):
         self.state = 0
         self.uuid = str(uuid.uuid4())
-        self.thread = None
-        self.parent = None
-        self.manager = None
+        self.idempotency_key = None
+        self.thread: Optional[Thread] = None
+        self.parent: Optional["Project"] = None
+        self.manager: Optional["ProjectManager"] = None
 
         self.project = project
         self.version = version
@@ -65,13 +81,19 @@ class Deployment:
 
         shutil.rmtree(self.upload_folder, ignore_errors=True)
 
-    def cleanup(self, code: str) -> int:
+    def cleanup(self, code: int) -> int:
         try:
             os.unlink(self.package_file)
         except FileNotFoundError:
             pass
 
         shutil.rmtree(self.upload_folder, ignore_errors=True)
+
+        if self.parent is None or self.manager is None:
+            # Deployed outside of the manager (e.g. in tests)
+            self.state = code
+            return self.state
+
         self.parent.deployment = None
         self.parent.last_state = code
         self.state = code
@@ -114,6 +136,10 @@ class Deployment:
 
         env = {"PATH": os.environ["PATH"], "PROJECT": self.project, "DEPLOY": self.uuid}
 
+        check_timeout = env_timeout("CHECK_TIMEOUT")
+        prepare_timeout = env_timeout("PREPARE_TIMEOUT")
+        deploy_timeout = env_timeout("DEPLOY_TIMEOUT")
+
         # UNPACK
 
         try:
@@ -134,7 +160,7 @@ class Deployment:
                 [self.control_script, "check"],
                 cwd=self.upload_folder,
                 env=env,
-                timeout=TIMEOUT,
+                timeout=check_timeout,
                 check=True,
                 capture_output=True,
                 text=True,
@@ -156,7 +182,7 @@ class Deployment:
                     [self.control_script, "prepare"],
                     cwd=self.upload_folder,
                     env=env,
-                    timeout=TIMEOUT,
+                    timeout=prepare_timeout,
                     check=True,
                     capture_output=True,
                     text=True,
@@ -193,7 +219,7 @@ class Deployment:
                 [self.control_script, "deploy"],
                 cwd=self.upload_folder,
                 env=env,
-                timeout=TIMEOUT,
+                timeout=deploy_timeout,
                 check=True,
                 capture_output=True,
                 text=True,
@@ -218,7 +244,8 @@ class Deployment:
             return self.cleanup(105)
 
         try:
-            self.parent.processed += os.path.getsize(self.image_file)
+            if self.parent is not None:
+                self.parent.processed += os.path.getsize(self.image_file)
         except OSError:
             pass
 
