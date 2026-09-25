@@ -1,5 +1,13 @@
 stages:
+  - test
   - build
+
+test:
+  stage: test
+  image: python:3-alpine
+  script:
+    - pip install -e .[dev]
+    - pytest tests/ -v
 
 build:
   stage: build
