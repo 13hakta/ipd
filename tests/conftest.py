@@ -118,6 +118,7 @@ def upload(client, admin_headers, make_package, make_image):
         version=None,
         omit_package=False,
         omit_image=False,
+        headers=None,
     ):
         data = {"project": project}
         if not omit_package:
@@ -126,7 +127,9 @@ def upload(client, admin_headers, make_package, make_image):
             data["image"] = image if image is not None else make_image()
         if version is not None:
             data["version"] = version
-        return client.post("/deploy/upload", data=data, headers=admin_headers)
+        return client.post(
+            "/deploy/upload", data=data, headers={**admin_headers, **(headers or {})}
+        )
 
     return _upload
 
