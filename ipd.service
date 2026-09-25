@@ -3,17 +3,29 @@ Description=Image Push and Deploy
 After=network.target
 
 [Service]
+Type=notify
 User=ipd
 WorkingDirectory=/opt/ipd
 ExecStart=/opt/ipd/bin/ipd
 EnvironmentFile=-/etc/default/ipd
 Restart=on-failure
+WatchdogSec=90
 
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/srv/upload
+# Must cover UPLOAD_DIR and every directory control.sh writes to
+# (the example script deploys to /srv)
+ReadWritePaths=/srv /srv/upload
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
 
 [Install]
 WantedBy=multi-user.target
