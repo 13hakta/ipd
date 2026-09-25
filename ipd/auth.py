@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 
+import hmac
 import logging
 from functools import wraps
 from hashlib import sha256
+from typing import Optional
 from flask import request, abort
 
-USERS = {}
+USERS: dict = {}
 
 VALID_ROLES = {"ADMIN", "USER"}
 
@@ -38,7 +40,7 @@ def load_db(source: str) -> int:
     return len(USERS)
 
 
-def require_role(role: str = None):
+def require_role(role: Optional[str] = None):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -49,8 +51,16 @@ def require_role(role: str = None):
 
             try:
                 encoded = data.encode("ascii")
-                user = USERS[sha256(encoded).hexdigest()]
-            except (UnicodeEncodeError, KeyError):
+            except UnicodeEncodeError:
+                abort(401)
+
+            token_hash = sha256(encoded).hexdigest()
+
+            for key, value in USERS.items():
+                if hmac.compare_digest(token_hash, key):
+                    user = value
+                    break
+            else:
                 abort(401)
 
             if role and user[0] != role:
