@@ -2,13 +2,34 @@
 
 from threading import RLock
 import logging
+import os
+import re
+import shutil
 import time
+import uuid as uuid_module
+from typing import Optional
 
 from .project import Project
+
+# Leftover files of a deployment interrupted by a service restart:
+# upload dir entry "{project}-{uuid}" or package "package.tar.{uuid}"
+PACKAGE_RE = re.compile(r"^package\.tar\.(.+)$")
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 TTL = 86400
 QUEUE_MAX = 200
 TASKS_MAX = 5
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid_module.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 class ProjectManager:
@@ -17,6 +38,7 @@ class ProjectManager:
         self.projects = {}
         self._lock = RLock()
         self._uploads = 0
+        self.start = time.time()
 
     def _process(self, deployment) -> int:
         """Register deployment in its project and start it.
@@ -103,7 +125,7 @@ class ProjectManager:
         with self._lock:
             return self.projects.get(project)
 
-    def get_state(self, project: str, deployment_uuid: str = None) -> str:
+    def get_state(self, project: str, deployment_uuid: Optional[str] = None) -> str:
         with self._lock:
             for item in self.deployment_queue:
                 if item.uuid == deployment_uuid:
@@ -140,6 +162,127 @@ class ProjectManager:
                 "queue": len(self.deployment_queue),
                 "uploads": self._uploads,
             }
+
+    def recover(self, upload_dir: str) -> int:
+        """Remove leftovers of deployments interrupted by a restart.
+
+        The queue lives in memory, so after a restart nothing references
+        on-disk upload files anymore. Only entries named by the service
+        itself ("{project}-{uuid}" dirs and "package.tar.{uuid}" files)
+        are removed, anything else in the directory is left untouched.
+        """
+        cleaned = 0
+
+        try:
+            entries = os.listdir(upload_dir)
+        except OSError as exc:
+            logging.warning("Recover: cant list %s: %s", upload_dir, exc)
+            return 0
+
+        for name in entries:
+            path = os.path.join(upload_dir, name)
+            match = PACKAGE_RE.match(name)
+
+            if match:
+                leftover = _is_uuid(match.group(1))
+            elif os.path.isdir(path):
+                # Deployment upload folders end with "-{uuid}";
+                # the uuid itself contains hyphens, take its full length
+                leftover = len(name) > 37 and name[-37] == "-" and _is_uuid(name[-36:])
+            else:
+                leftover = False
+
+            if not leftover:
+                continue
+
+            logging.info("Recover: remove leftover %s", name)
+
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+            cleaned += 1
+
+        if cleaned:
+            logging.info(
+                "Recover: cleaned %d leftover items in %s", cleaned, upload_dir
+            )
+
+        return cleaned
+
+    def stop(self, timeout: float = 60.0) -> None:
+        """Wait for running deployments to finish (graceful shutdown)"""
+        deadline = time.time() + timeout
+
+        with self._lock:
+            running = [
+                project.deployment
+                for project in self.projects.values()
+                if project.deployment and project.deployment.thread
+            ]
+
+        if running:
+            logging.info("Shutdown: waiting for %d running deployment(s)", len(running))
+
+        for deployment in running:
+            remaining = max(0.0, deadline - time.time())
+
+            if deployment.thread:
+                deployment.thread.join(remaining)
+
+        for deployment in running:
+            if deployment.thread and deployment.thread.is_alive():
+                logging.warning(
+                    "Shutdown: deployment %s still running after timeout", deployment
+                )
+
+    def find_idempotent(self, project: str, key: str):
+        """Find a queued or running deployment by idempotency key"""
+        with self._lock:
+            for item in self.deployment_queue:
+                if item.project == project and item.idempotency_key == key:
+                    return item
+
+            project_obj: Optional[Project] = self.projects.get(project)
+
+            if project_obj and project_obj.deployment:
+                deployment = project_obj.deployment
+
+                if deployment.idempotency_key == key and deployment.state < 4:
+                    return deployment
+
+        return None
+
+    def metrics(self) -> str:
+        """Service statistics in Prometheus text format"""
+        with self._lock:
+            processed = sum(project.processed for project in self.projects.values())
+            lines = [
+                "# HELP ipd_projects Number of known projects.",
+                "# TYPE ipd_projects gauge",
+                "ipd_projects %d" % len(self.projects),
+                "# HELP ipd_queue_depth Deployments waiting in queue.",
+                "# TYPE ipd_queue_depth gauge",
+                "ipd_queue_depth %d" % len(self.deployment_queue),
+                "# HELP ipd_running_deployments Currently running deployments.",
+                "# TYPE ipd_running_deployments gauge",
+                "ipd_running_deployments %d" % self._running_count(),
+                "# HELP ipd_uploads_total Total accepted uploads.",
+                "# TYPE ipd_uploads_total counter",
+                "ipd_uploads_total %d" % self._uploads,
+                "# HELP ipd_processed_bytes_total Deployed image size, bytes.",
+                "# TYPE ipd_processed_bytes_total counter",
+                "ipd_processed_bytes_total %d" % processed,
+                "# HELP ipd_uptime_seconds Service uptime.",
+                "# TYPE ipd_uptime_seconds gauge",
+                "ipd_uptime_seconds %d" % int(time.time() - self.start),
+            ]
+
+        return "\n".join(lines) + "\n"
 
     def cleanup(self) -> None:
         stamp = time.time()
