@@ -15,7 +15,8 @@ NoNewPrivileges=true
 ProtectSystem=strict
 # Must cover UPLOAD_DIR and every directory control.sh writes to
 # (the example script deploys to /srv)
-ReadWritePaths=/srv /srv/upload
+ReadWritePaths=/home/ipd /srv /srv/upload
+BindPaths=/home/ipd
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
